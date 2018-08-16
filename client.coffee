@@ -1,6 +1,7 @@
 uuid = require('node-uuid')
 signing = require('./signing')
 SubscriptionManager = require('./subscription').SubscriptionManager
+logger = require('./logger').logger
 
 clients = {}
 
@@ -8,11 +9,17 @@ clients = {}
 class Client
     constructor: (@ws) ->
         @.id = uuid.v4()
-
         @.handleEvents()
 
     handleEvents: () ->
         @ws.on 'message', @.handleMessage.bind(@)
+        @ws.on 'error', @.handleError.bind(@)
+
+    handleError: (error) ->
+        req = @ws.upgradeReq
+        headers = req.headers
+        logger.error "evt=client_errorx_forwarded_for=%s", headers['x-forwarded-for']
+        logger.error error
 
     handleMessage: (message) ->
         try
@@ -25,7 +32,11 @@ class Client
         else if msg.cmd == 'auth' and msg.data
             @.authUser(msg.data)
         else if msg.cmd == 'subscribe' and msg.routing_key
-            @.addSubscription(msg.routing_key)
+            if @.auth and msg.routing_key.indexOf("live_notifications") == 0
+                userId = signing.getUserId(@.auth.token)
+                @.addSubscription("live_notifications.#{userId}")
+            else
+                @.addSubscription(msg.routing_key)
         else if msg.cmd == 'unsubscribe' and msg.routing_key
             @.removeSubscription(msg.routing_key)
 
@@ -47,7 +58,7 @@ class Client
         try
             @ws.send(JSON.stringify({cmd: "pong"}))
         catch e
-            console.error("Error: ", e)
+            logger.error e
 
     close: () ->
         if @.subscriptionManager
